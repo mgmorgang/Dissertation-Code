@@ -1,0 +1,557 @@
+library(tidyverse)
+library(rmarkdown)
+library(knitr)
+library(epitools)
+library(tidyverse)
+library(Hmisc);
+library(magrittr)
+library(ggplot2)
+library(survival)
+library(survminer)
+library(gtsummary)
+library(survMisc)
+library(tidyr)
+
+data <- read.csv("Data.csv")
+summary(data)
+
+#Testing distribution to determine if I want to use median or mean
+
+data["Dementia_only"][is.na(data["Dementia_only"])] <- 1
+print(data)
+
+data_w <- data %>%
+  mutate(Sex=factor(Sex,labels = c("Male","Female")),
+         Smoking=factor(Smoking, labels = c("Current", "Ex", "Never")),
+         MI=factor(MI, labels = c("No", "Unsure", "Yes")),
+         Stroke=factor(Stroke, labels = c("No","Unsure", "Yes")),
+         Dementia_only=factor(Dementia_only,labels = c("No", "Yes")),
+         HADDep_BL=factor(HADDep_BL, labels = c("No","No","No","No","No","No","No","No",
+                                                "Unsure","Unsure","Unsure",
+                                                "Yes","Yes","Yes","Yes","Yes","Yes")),
+         HADAnx_BL=factor(HADAnx_BL,labels=c("No","No","No","No","No","No","No","No",
+                                             "Unsure","Unsure","Unsure",
+                                             "Yes","Yes","Yes","Yes","Yes","Yes","Yes",
+                                             "Yes","Yes")))
+summary(data_w)
+
+data_w %>%
+  ggplot(aes(x=Systolic_BP)) +
+  geom_histogram()
+# Fairly normal.
+
+data_w %>%
+  ggplot(aes(x=BMI)) +
+  geom_histogram()
+#Lots of overweight, probably median
+
+data_w %>%
+  ggplot(aes(x=Age_years)) +
+  geom_histogram()
+#Median most likely, mean and median should be roughly the same here, so can
+#choose depending on the rest.
+
+data_w %>%
+  ggplot(aes(x=DurationDiabetes)) +
+  geom_histogram()
+#Way skewed left. Median probably, might need to transform this variable.
+
+data_w %>%
+  ggplot(aes(x=Cortisol_nmol.L)) +
+  geom_histogram()
+#Very normal, mean
+
+data_w %>%
+  ggplot(aes(x=Cholest_nmol.L)) +
+  geom_histogram()
+#Kinda skewed left. Median probably, might need to transform this too.
+
+#Will use the medians and IQRs as there is some skewing in the data. Most of the
+#time, the medians and the means are really similar.
+
+#Exploratory Data Analysis
+
+# CONTINUOUS VARIABLES
+
+# Cortisol and Dementia
+data_w %>%
+  ggplot(aes(x=Dementia_only, y=Cortisol_nmol.L)) +
+  geom_boxplot()
+#The box plots look very similar. Like, medians and IQRs are almost the same.
+#Will try a Welch Two Sample t-test to see:
+data_w %>%
+  t.test(.$Cortisol_nmol.L~.$Dementia_only,data=.)
+
+data_w %>%
+  group_by(Dementia_only) %>%
+  get_summary_stats(Cortisol_nmol.L, type = "mean_sd")
+
+#Results: p-value = 0.71, confidence interval -51.92 to 35.39. No evidence
+#of an association between cortisol and dementia development at this time.
+
+# Age and Dementia
+data_w %>%
+  ggplot(aes(x=Dementia_only, y=Age_years)) +
+  geom_boxplot()
+#Being older looks to be associated with dementia development.
+#Next, Welch Two Sample t-test to check p-values and CI
+data_w %>%
+  t.test(.$Age_years~.$Dementia_only,data=.)
+data_w %>%
+  group_by(Dementia_only) %>%
+  get_summary_stats(Age_years, type = "mean_sd")
+
+#Results: p-value = 7.5xe-5, so very small and the confidence interval is -2.47 to
+#-0.86, so there is a statistically significant difference between the ages of
+#those with and without dementia.
+
+#Blood Pressure and Dementia
+data_w %>%
+  mutate(Systolic_BP=log(Systolic_BP)) %>%
+  ggplot(aes(x=Systolic_BP)) +
+  geom_histogram()
+#It helps a bit to log transform the data, but nothing really that significantly.
+#Will keep the original data to eliminate need for backtransformation. 
+data_w %>%
+  ggplot(aes(x=Dementia_only, y=Systolic_BP)) +
+  geom_boxplot()
+# The SBP looks pretty similar between those with and without dementia.
+# Results: Welch t-test ?
+data_w %>%
+  t.test(.$Systolic_BP~.$Dementia_only,data=.)
+data_w %>%
+  group_by(Dementia_only) %>%
+  get_summary_stats(Systolic_BP, type = "mean_sd")
+# Again, large p-value (0.69) and wide confidence interval that includes the null
+# (-2.54 to 3.86). No evidence of association between SBP and dementia. 
+
+#BMI and Dementia
+data_w %>%
+  mutate(BMI=log(BMI)) %>%
+  ggplot(aes(x=BMI)) +
+  geom_histogram()
+#Yeah, logBMI looks much nicer.
+data_w %>%
+  ggplot(aes(x=Dementia_only, y=log(BMI))) +
+  geom_boxplot()
+#LogBMI looks higher in those without dementia than in those with dementia (this
+#matches up with the literature review I've done so far)
+data_w <- within(data_w, log_BMI <- log(BMI))
+
+#Results: Welch t-test ?
+data_w %>%
+  t.test(.$log_BMI~.$Dementia_only,data=.)
+data_w %>%
+  t.test(.$BMI~.$Dementia_only,data=.)
+wilcox.test(BMI~Dementia_only,data=data_w,conf.int=T)
+
+#Because all of the t-tests (log and not, and non parametric) are almost the same
+#p-value, just go with non parametric.
+
+data_w %>%
+  group_by(Dementia_only) %>%
+  get_summary_stats(BMI, type = "mean_sd")
+#P-value = 0.0031 and CI -2.68 to -0.017. Yep, there's a statistically significant
+#association between BMI and dementia development (higher BMI and no dementia).
+#All of the hypothesis tests result in similar p-values and CIs, so I'm not that
+#concerned with choosing the 'correct' one. We'll stick with Welch's and NOT log
+#transformed BMI bc they're basically the same.
+
+# Cholesterol and Dementia
+data_w %>%
+  ggplot(aes(x=Dementia_only, y=Cholest_nmol.L)) +
+  geom_boxplot()
+
+data_w %>%
+  t.test(.$Cholest_nmol.L~.$Dementia_only,data=.)
+
+data_w %>%
+  group_by(Dementia_only) %>%
+  get_summary_stats(Cholest_nmol.L, type = "mean_sd")
+# Results: p-value = 0.564, no statistically significant difference in mean
+#cholesterol between those with and without dementia.
+
+#Duration of Diabetes and Dementia
+data_w %>%
+  mutate(DurationDiabetes=log(DurationDiabetes)) %>%
+  ggplot(aes(x=DurationDiabetes)) +
+  geom_histogram()
+
+data_w %>%
+  mutate(DurationDiabetes=sqrt(DurationDiabetes)) %>%
+  ggplot(aes(x=DurationDiabetes)) +
+  geom_histogram()
+
+# Neither transformation is really helping all that much. I'll do a nonparametric
+# hypothesis test instead.
+
+data_w %>%
+  ggplot(aes(x=Dementia_only, y=DurationDiabetes)) +
+  geom_boxplot()
+
+wilcox.test(DurationDiabetes~Dementia_only,data=data_w,conf.int=T)
+
+data_w %>%
+  group_by(Dementia_only) %>%
+  get_summary_stats(DurationDiabetes, type = "mean_sd")
+
+# CATEGORICAL VARIABLES
+
+# Sex and Dementia Development
+data_w %>%
+  tbl_cross(row=Sex, col=Dementia_only, percent = "row",
+            label = list (Dementia_only~"Dementia Status",
+                          Sex~"Participant Sex"))
+#Right off the bat, it looks like there are more men with dementia than women
+#(this goes against most of the literature I've read so far)
+# Chi-Squared Test
+data_w %>%
+  select(Dementia_only,Sex) %>%
+  table() %>%
+  chisq.test()
+#P-value is marginal = 0.062. Very close to the acceptable value, so, maybe?
+
+# HADs Depression and Dementia
+data_w %>%
+  drop_na(HADDep_BL) %>%
+  tbl_cross(row=HADDep_BL, col=Dementia_only, percent = "row",
+            label = list (Dementia_only~"Dementia Status",
+                          HADDep_BL~"Depression Status"))
+
+data_w %>%
+  drop_na(HADDep_BL) %>%
+  select(Dementia_only,HADDep_BL) %>%
+  table() %>%
+  chisq.test()
+#P-value = 0.0082. 
+
+# HADs Anxiety and Dementia
+data_w %>%
+  drop_na(HADAnx_BL) %>%
+  tbl_cross(row=HADAnx_BL, col=Dementia_only, percent = "row",
+            label = list (Dementia_only~"Dementia Status",
+                          HADAnx_BL~"Anxiety Status"))
+
+data_w %>%
+  drop_na(HADAnx_BL) %>%
+  select(Dementia_only,HADAnx_BL) %>%
+  table() %>%
+  chisq.test()
+#P-value = 0.026. 
+
+# Myocardial Infarction and Dementia
+data_w %>%
+  drop_na(MI) %>%
+  tbl_cross(row=MI, col=Dementia_only, percent = "row",
+            label = list (Dementia_only~"Dementia Status",
+                          MI~"Myocardial Infarction Status"))
+
+data_w %>%
+  drop_na(MI) %>%
+  select(Dementia_only,MI) %>%
+  table() %>%
+  chisq.test()
+#P-value = 0.29, not significant.
+
+# Stroke and Dementia
+data_w %>%
+  drop_na(Stroke) %>%
+  tbl_cross(row=Stroke, col=Dementia_only, percent = "row",
+            label = list (Dementia_only~"Dementia Status",
+                          Stroke~"Stroke Status"))
+
+data_w %>%
+  drop_na(Stroke) %>%
+  select(Dementia_only,Stroke) %>%
+  table() %>%
+  chisq.test()
+#P-value = 0.27, not significant.
+
+# Smoking and Dementia
+data_w %>%
+  drop_na(Smoking) %>%
+  tbl_cross(row=Smoking, col=Dementia_only, percent = "row",
+            label = list (Dementia_only~"Dementia Status",
+                          Smoking~"Smoking Status"))
+
+data_w %>%
+  drop_na(Smoking) %>%
+  select(Dementia_only,Smoking) %>%
+  table() %>%
+  chisq.test()
+#P-value = 0.10.
+
+# UNADJUSTED LOGISTIC REGRESSION MODELS
+
+# Model 1 - MI and Dementia
+model1<-glm(Dementia_only~MI,family=binomial("logit"),data=data_w)
+summary(model1)
+exp(cbind(OR=model1$coeff,confint(model1)))
+# If you have MI, it seems like there's 1.35x the odds of incident dementia, but
+# the 95% CI (0.79 to 2.23) includes the null, so there's the possibility that the
+# results are due to chance. Larger sample size of patients with dementia needed.
+
+# Model 2 - Stroke and Dementia
+model2<-glm(Dementia_only~Stroke,family=binomial("logit"),data=data_w)
+summary(model2)
+exp(cbind(OR=model2$coeff,confint(model2)))
+# If a patient has a stroke, they're 1.49x more likely to have incident dementia,
+# but the 95% CI (0.75 to 2.74) includes the null, so there's the possibility that
+# the results are due to chance. Larger sample size of patients with dementia needed.
+
+# Model 3 - SBP and Dementia
+model3<-glm(Dementia_only~Systolic_BP,family=binomial("logit"),data=data_w)
+summary(model3)
+exp(cbind(OR=model3$coeff,confint(model3)))
+# Systolic blood pressure doesn't seem to influence the odds of incident dementia
+# (OR = 1.00; 0.99 to 1.01). However, I didn't take into account anything about
+# blood pressure lowering medication, which might affect the results.
+
+# Model 4 - Cholesterol and Dementia
+model4<-glm(Dementia_only~Cholest_nmol.L,family=binomial("logit"),data=data_w)
+summary(model4)
+exp(cbind(OR=model4$coeff,confint(model4)))
+# Cholesterol doesn't seem to influence the odds of incident dementia
+# (OR = 0.93; 0.73 to 1.16). However, I didn't take into account anything about
+# blood pressure lowering medication, which might affect the results.
+
+# Model 5 - HADS Dep and Dementia
+model5<-glm(Dementia_only~HADDep_BL,family=binomial("logit"),data=data_w)
+summary(model5)
+exp(cbind(OR=model5$coeff,confint(model5)))
+# Having depression at baseline increases the odds of incident dementia by 2.78
+# times (1.00 to 6.64). The confidence interval does include 1.00, so there is
+# a possibility that this is due to chance, but these findings align with what
+# I have found in the existing research. Additionally, being a "cusp" case is
+# also associated with with incident dementia (1.99; 1.08 to 2.47) and has a
+# narrower confidence interval. Depression and incident dementia are associated.
+
+# Model 6 - HADS Anxiety and Dementia
+model6<-glm(Dementia_only~HADAnx_BL,family=binomial("logit"),data=data_w)
+summary(model6)
+exp(cbind(OR=model6$coeff,confint(model6)))
+# Having anxiety at baseline increases the odds of incident dementia by 2.06
+# times (1.11 to 3.66). Additionally, being a "cusp" case is also associated with
+# with incident dementia (1.55; 0.91 to 2.56). This does include the null though, so
+# it's possible that the results are due to chance. Anxiety and incident dementia
+# are associated.
+
+# Model 7 - Cortisol and Dementia
+model7<-glm(Dementia_only~Cortisol_nmol.L,family=binomial("logit"),data=data_w)
+summary(model7)
+exp(cbind(OR=model7$coeff,confint(model7)))
+# No evidence of association. OR = 1.00, 95% CI (0.99 to 1.00). Definitely no
+# evidence of association in an unadjusted model.
+
+datamiss<- data_w %>%
+  drop_na(Systolic_BP,BMI,Sex,Age_years,Dementia_only,Smoking,DurationDiabetes,
+          MI,Stroke,Cortisol_nmol.L,Cholest_nmol.L,HADDep_BL,HADAnx_BL)
+summary(datamiss)
+
+# ADJUSTED LOGISTIC REGRESSION - NESTED
+# With all of the data
+normal <- glm(Dementia_only~Cortisol_nmol.L,
+                     data = data_w,
+                     family=binomial('logit'))
+exp(cbind(OR=normal$coeff,confint(normal)))
+summary(normal)
+anova(normal)
+
+# With drop NA data
+normal2 <- glm(Dementia_only~Cortisol_nmol.L,
+              data = datamiss,
+              family=binomial('logit'))
+exp(cbind(OR=normal2$coeff,confint(normal2)))
+summary(normal2)
+anova(normal2)
+
+#Interpretation? Same ORs and CIs for both despite the difference in population size.
+# (1.00; 0.99 to 1.001)
+
+# With all of the data
+modelA <- glm(Dementia_only~BMI+Sex+Age_years+Smoking+DurationDiabetes+Cortisol_nmol.L,
+              data = data_w,
+              family=binomial('logit'))
+exp(cbind(OR=modelA$coeff,confint(modelA)))
+summary(modelA)
+anova(modelA)
+
+# With drop NA data
+modelA1 <- glm(Dementia_only~BMI+Sex+Age_years+Smoking+DurationDiabetes+Cortisol_nmol.L,
+              data = datamiss,
+              family=binomial('logit'))
+exp(cbind(OR=modelA1$coeff,confint(modelA1)))
+summary(modelA1)
+anova(modelA1)
+#Interpretation? Same ORs and CIs for both despite the difference in population size.
+#(1.00; 0.99 to 1.001). Still the same, adding in the demographic variables doesn't
+#do anything for altering the relationship between cortisol and incident dementia.
+
+# With all of the data
+modelB <- glm(Dementia_only~BMI+Sex+Age_years+Smoking+DurationDiabetes+MI+Stroke+
+                Cholest_nmol.L+Systolic_BP+Cortisol_nmol.L,
+              data = data_w,
+              family=binomial('logit'))
+exp(cbind(OR=modelB$coeff,confint(modelB)))
+summary(modelB)
+anova(modelB)
+
+# With drop NA data
+modelB1 <- glm(Dementia_only~BMI+Sex+Age_years+Smoking+DurationDiabetes+MI+Stroke+
+                Cholest_nmol.L+Systolic_BP+Cortisol_nmol.L,
+              data = datamiss,
+              family=binomial('logit'))
+exp(cbind(OR=modelB1$coeff,confint(modelB1)))
+summary(modelB1)
+anova(modelB1)
+#Interpretation? Same ORs and CIs for both despite the difference in population size.
+#(1.00; 0.99 to 1.001). Still the same, adding in the demographic variables and
+#the cardiovascular variables don't do anything for altering the relationship
+# between cortisol and incident dementia.
+
+# With all of the data
+modelC <- glm(Dementia_only~BMI+Sex+Age_years+Smoking+DurationDiabetes+MI+Stroke+
+                Cholest_nmol.L+Systolic_BP+HADDep_BL+HADAnx_BL+Cortisol_nmol.L,
+              data = data_w,
+              family=binomial('logit'))
+exp(cbind(OR=modelC$coeff,confint(modelC)))
+summary(modelC)
+anova(modelC)
+
+# With drop NA data
+modelC1 <- glm(Dementia_only~BMI+Sex+Age_years+Smoking+DurationDiabetes+MI+Stroke+
+                Cholest_nmol.L+Systolic_BP+HADDep_BL+HADAnx_BL+Cortisol_nmol.L,
+              data = datamiss,
+              family=binomial('logit'))
+exp(cbind(OR=modelC1$coeff,confint(modelC1)))
+summary(modelC1)
+anova(modelC1)
+#Interpretation? Same ORs and CIs for both despite the difference in population size.
+#(1.00; 0.99 to 1.001). Still the same, adding in the demographic variables,
+#the cardiovascular variables, and the depression variables don't do anything for
+#altering the relationship between cortisol and incident dementia.
+
+#Key findings? The missing values don't change the associations (or lack thereof)
+#found in the analyses. Therefore, I want to use the complete case analysis to
+#keep the population size the same throughout the whole analysis. Additionally,
+#after adding in all of the variables of interest, nothing seems to change the lack
+#of association between cholesterol level and incident dementia in this population.
+
+#Investigating interaction between depression and cortisol?
+dep_model<- glm(Dementia_only~HADDep_BL+HADAnx_BL+HADDep_BL:Cortisol_nmol.L+
+                  Cortisol_nmol.L,
+                data = datamiss,
+                family=binomial('logit'))
+exp(cbind(OR=dep_model$coeff,confint(dep_model)))
+summary(dep_model)
+anova(dep_model)
+#No evidence of any interaction between depression and cortisol(0.99; 0.99 to 1.003).
+
+#SURVIVIAL ANALYSIS
+coxdata<-read.csv("coxdata.csv")
+library(dplyr)
+coxdata_w <- coxdata %>%
+  mutate(
+    Start_date = as.Date(Start_date),
+    Diagnosis_date = as.Date(Diagnosis_date),
+    DoD = as.Date(DoD),
+    Date_followup = as.Date(Date_followup)
+  )
+coxdata_w <- coxdata_w %>%
+  rowwise() %>%
+  mutate(
+    Surviv_date = pmin(Diagnosis_date, DoD, Date_followup, na.rm = TRUE),
+    Survivtm = as.numeric(difftime(Surviv_date, Start_date, units = "days"))
+  ) %>%
+  ungroup()
+head(coxdata_w)
+
+coxdata1 <- coxdata_w %>%
+  mutate(Diagnosis=factor(Diagnosis,labels = c("No", "Yes")),
+         Sex=factor(Sex,labels = c("Male","Female")),
+         Smoking=factor(Smoking, labels = c("Current", "Ex", "Never")),
+         MI=factor(MI, labels = c("No", "Unsure", "Yes")),
+         Stroke=factor(Stroke, labels = c("No","Unsure", "Yes")),
+         HADDep_BL=factor(HADDep_BL, labels = c("No","No","No","No","No","No","No","No",
+                                                "Unsure","Unsure","Unsure",
+                                                "Yes","Yes","Yes","Yes","Yes","Yes")),
+         HADAnx_BL=factor(HADAnx_BL,labels=c("No","No","No","No","No","No","No","No",
+                                             "Unsure","Unsure","Unsure",
+                                             "Yes","Yes","Yes","Yes","Yes","Yes","Yes",
+                                             "Yes","Yes")))
+coxdata1 %$% Surv(Survivtm,Diagnosis=="Yes")
+
+coxdata1.cox<-coxph(Surv(Survivtm,Diagnosis=="Yes")~Cortisol_nmol.L,data=coxdata1)
+summary(coxdata1.cox)
+anova(coxdata1.cox)
+
+# Interpretation: HR = 0.9997, 95% CI (0.9993 to 1.001) - No evidence of cortisol
+# influencing rate of incident dementia diagnosis.
+
+# Proportional Hazards Test
+cox.zph(coxdata1.cox)
+ggcoxzph(fit=cox.zph(coxdata1.cox),
+         point.col="red",
+         point.size=2,
+         caption="Proportional Hazards Test",
+         var=c("Cortisol_nmol.L"),
+         ggtheme = theme_bw())
+# Fail to reject the null.
+
+# Adding in Demographic Factors
+coxdata2.cox<-coxph(Surv(Survivtm,Diagnosis=="Yes")~Cortisol_nmol.L+
+                      BMI+Sex+Age_years+Smoking+DurationDiabetes,data=coxdata1)
+summary(coxdata2.cox)
+anova(coxdata2.cox)
+# Interpretation: cortisol HR = 1.00, 95% CI (0.999 to 1.001) - Again, no evidence
+# of cortisol influencing the rate of incident dementia diagnosis. In fact, only
+# age has a statistically significant hazard ratio (1.10; 1.05 to 1.16).
+
+cox.zph(coxdata2.cox)
+ggcoxzph(fit=cox.zph(coxdata2.cox),
+         point.col="red",
+         point.size=2,
+         caption="Proportional Hazards Test",
+         var=c("Cortisol_nmol.L"),
+         ggtheme = theme_bw())
+# Fail to reject the null.
+
+# Adding in CARDIOVASCULAR Factors now
+coxdata3.cox<-coxph(Surv(Survivtm,Diagnosis=="Yes")~Cortisol_nmol.L+
+                      BMI+Sex+Age_years+Smoking+DurationDiabetes+MI+Stroke+
+                      Cholest_nmol.L+Systolic_BP,data=coxdata1)
+summary(coxdata3.cox)
+anova(coxdata3.cox)
+# Still, the only significant HR is that of age (1.10; 1.04 to 1.16). Confidence
+# interval is getting slightly wider, making the measured association slightly
+# weaker. Same trend for the cortisol HR;CI (1.00; 0.9991 to 1.001).
+
+cox.zph(coxdata3.cox)
+ggcoxzph(fit=cox.zph(coxdata3.cox),
+         point.col="red",
+         point.size=2,
+         caption="Proportional Hazards Test",
+         var=c("Cortisol_nmol.L"),
+         ggtheme = theme_bw())
+# Still reject proportional hazards. Cortisol is fairly close, meaning that the
+# hazards are (almost) proportional.
+
+# Adding in MOOD Factors
+coxdata4.cox<-coxph(Surv(Survivtm,Diagnosis=="Yes")~Cortisol_nmol.L+
+                      BMI+Sex+Age_years+Smoking+DurationDiabetes+MI+Stroke+
+                      Cholest_nmol.L+Systolic_BP+HADDep_BL+HADAnx_BL,data=coxdata1)
+summary(coxdata4.cox)
+anova(coxdata4.cox)
+# Age is still significant (1.10; 1.04 to 1.16).Cortisol is still insignificant
+# with a growing confidence interval (1.00; 0.9991 to 1.001). Depression is also
+# marginally associated with earlier incident dementia development in patients
+# with T2DM (1.10; 1.02 to 1.21).
+
+cox.zph(coxdata4.cox)
+ggcoxzph(fit=cox.zph(coxdata4.cox),
+         point.col="red",
+         point.size=2,
+         caption="Proportional Hazards Test",
+         var=c("Cortisol_nmol.L"),
+         ggtheme = theme_bw())
+# Can still reject the null.
